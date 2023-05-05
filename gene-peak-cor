@@ -1,0 +1,65 @@
+import pandas as pd
+import numpy as np
+from scipy.stats import pearsonr
+import math
+import os
+import random
+import time
+import datetime
+from multiprocessing import Pool
+
+def humanReadableTimeUnit(t):
+    t = abs(t)
+    for u in ['second(s)', 'minute(s)']:
+        if t < 60.0:
+            return '{} {}'.format(t, u)
+        t = t/60
+    return '{} {}'.format(t, 'hour(s)')
+
+def corr(row):
+    global gene_expr, gene_expr_cols, peak_expr, peak_expr_cols
+
+    gene_peak_pair_r = pearsonr(gene_expr.loc[row['gene_id'], gene_expr_cols],peak_expr.loc[row['peak_id'], peak_expr_cols])
+   
+    return pd.concat([row, pd.Series(gene_peak_pair_r, index = ['pcc', 'pcc_pvalue'])])
+
+def parCorr(gene_peak_pair):
+    global file_prefix
+
+    proc_pid = str(os.getpid())
+    proc_timestamp = str(datetime.datetime.timestamp(datetime.datetime.now()))
+    random_num = str(random.random())
+    proc_file = '{}_{}_{}_{}.txt'.format(file_prefix, proc_timestamp, proc_pid, random_num)
+    
+    gene_peak_pair_r = gene_peak_pair.apply(corr, axis = 1)  # apply function corr() on each row
+    gene_peak_pair_r.to_csv(proc_file, sep = '\t', na_rep = 'NA', header = True, index = False, mode = 'w')
+    
+    return 'Chunk {} - {} - {} ... done!\nProcess output file: {}\n'.format(proc_timestamp, proc_pid, random_num, proc_file)
+
+if __name__ == '__main__':
+    file_prefix = '/sde/xujiahao/G-P-link/pcc/cor'  # output file basename
+    
+    ## simulation data
+   # gene_id = ['gene_' + str(x) for x in range(1000)]
+   # peak_id = ['peak_' + str(x) for x in range(1000)]
+    gene_peak_pair = pd.read_csv('/sde/xujiahao/G-P-link/pcc/archr_peak_gene_EN_IPC_2.txt',header=0,sep="\t")
+    
+   # gene_expr_cols = ['WT_P21_RNA', 'KI_P21_RNA', 'WT_P60_RNA', 'KI_P60_RNA', 'WT_P120_RNA', 'WT_P120_RNA']
+   # peak_expr_cols = ['WT_P21_ATAC', 'KI_P21_ATAC', 'WT_P60_ATAC', 'KI_P60_ATAC', 'WT_P120_ATAC', 'KI_P120_ATAC']
+    gene_expr_cols=list(map(str,np.arange(1,640)))
+    peak_expr_cols=list(map(str,np.arange(1,640)))
+    gene_expr = pd.read_csv('/sde/xujiahao/G-P-link/pcc/archr_pt_gene_EN_IPC.txt',header=0,sep="\t",index_col=0)
+    peak_expr = pd.read_csv('/sde/xujiahao/G-P-link/pcc/archr_peak_EN_IPC.txt',header=0,sep="\t",index_col=0)
+
+    split_num = 16  # split number
+    proc_num = 16  # maximum number of process
+    gene_peak_pair_parts = np.array_split(gene_peak_pair, split_num)  # split DataFrame
+    
+    t1 = time.time()
+    with Pool(processes = proc_num) as pool:  # with the same result as pool.close()
+        iter_res = pool.imap_unordered(parCorr, gene_peak_pair_parts, 1)
+        for res in iter_res:  # block here (with the same result as pool.join())
+            print(res)
+    t2 = time.time()
+    
+    print("\nTotal running time: {}\nRunning done!\n".format(humanReadableTimeUnit(t2 - t1)))
